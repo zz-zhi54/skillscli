@@ -12,26 +12,62 @@
 
 ## 安装与前提
 
-需要 Go **1.22 或更新版本**及 PATH 中可执行的系统 **Git**。
+普通用户**不需要安装 Go**，但运行 skillscli 仍需要 PATH 中可执行的系统 **Git**。
 
-推荐使用 `go install` 安装，可用版本以 [Releases](https://github.com/zz-zhi54/skillscli/releases) 页面为准：
+从 [GitHub Releases](https://github.com/zz-zhi54/skillscli/releases) 选择版本，下载对应平台的可执行文件（无需解压）：
+
+| 平台 | 下载文件 |
+| --- | --- |
+| macOS Apple Silicon | `skillscli_darwin_arm64` |
+| Windows x64 | `skillscli_windows_amd64.exe` |
+| Windows ARM64 | `skillscli_windows_arm64.exe` |
+| Linux x64 | `skillscli_linux_amd64` |
+| Linux ARM64 | `skillscli_linux_arm64` |
+
+不提供 macOS Intel 版本。beta、rc 等版本在 Releases 中标记为预发布；升级前请阅读对应版本说明。
+
+### macOS / Linux
+
+在下载目录运行以下命令，将文件名替换为对应平台的名称：
 
 ```sh
-go install github.com/zz-zhi54/skillscli@<version>
+mkdir -p "$HOME/.local/bin"
+chmod +x skillscli_darwin_arm64
+mv skillscli_darwin_arm64 "$HOME/.local/bin/skillscli"
+export PATH="$HOME/.local/bin:$PATH"
+skillscli --help
+git --version
 ```
 
-把 `<version>` 替换成 Releases 中列出的标签。预发布版本不会被 `@latest` 选中；如果 `@latest` 因代理缓存等原因不可用，请显式指定标签。命令和行为可能随版本演进调整，升级前请查看对应 Release 的说明。
+将 `export PATH="$HOME/.local/bin:$PATH"` 加入所用 Shell 的配置（如 `~/.zshrc` 或 `~/.bashrc`），重新打开终端后生效。
 
-也可以在本项目根目录构建（程序入口位于根目录 `main.go`）：
+### Windows
+
+将下载文件重命名为 `skillscli.exe`，放入固定目录（如 `%USERPROFILE%\bin`）。在“系统属性 → 环境变量”中将该目录添加到用户 `Path`，重新打开 PowerShell 后运行：
+
+```powershell
+skillscli --help
+git --version
+```
+
+### 校验与升级
+
+每个新版本还提供 `checksums.txt`，列出五个可执行文件的 SHA-256。请在重命名前校验下载文件：macOS 使用 `shasum -a 256 <文件名>`，Linux 使用 `sha256sum <文件名>`，Windows 使用 `Get-FileHash .\<文件名> -Algorithm SHA256`，将结果与校验文件中对应行比较。
+
+当前没有自动升级或 `sync --upgrade`；升级时下载新版本并替换已安装的程序。早期 Release 可能没有二进制附件，请选择包含上述附件的版本。
+
+### 开发者从源码构建
+
+需要 Go **1.22 或更新版本**及系统 Git。在本项目根目录构建（程序入口位于根目录 `main.go`）：
 
 ```sh
-go build -o skillscli .
-./skillscli --help
+go build -o dist/skillscli .
+./dist/skillscli --help
 # 或不生成二进制直接运行
 go run . --help
 ```
 
-Windows 可使用 `go build -o skillscli.exe .`。把生成的程序放到 PATH 后即可直接运行 `skillscli`。当前没有自动升级或 `sync --upgrade`；升级请重新执行 `go install` 并指定新版本。
+Windows 可使用 `go build -o dist/skillscli.exe .`。
 
 ## 快速开始
 
@@ -166,7 +202,7 @@ lock 是本地所有权与修改保护依据，不是需要先恢复的旧 Git �
 ## 开发与验证
 
 ```sh
-gofmt -l cmd internal
+gofmt -l main.go internal
 go test -count=1 ./...
 go test -race -count=1 ./...
 go vet ./...
@@ -178,6 +214,16 @@ GOOS=linux GOARCH=amd64 go build ./...
 测试使用隔离的本地临时 Git 仓库，不依赖真实远程服务或认证；覆盖完整命令生命周期、两个作用域、引用选择、修改保护、冲突、事务失败与中断恢复。平台特殊测试按实际条件跳过。
 
 当前实际运行验证平台为 macOS；Windows/Linux 交叉编译仅检查可编译性，不代表这些系统上的真实文件系统、权限和文件占用行为已通过运行测试。适合在上述边界内进行日常使用；首次在其他平台使用前建议备份并做实际环境验证。
+
+## 版本与自动发布
+
+开发者在每个目标为 `main` 的 PR 中更新根目录 [VERSION](<VERSION>)，格式为 `X.Y.Z` 或 `X.Y.Z-beta.1` / `X.Y.Z-rc.1` 等 SemVer 预发布版本，不带 `v` 前缀或构建元数据。
+
+PR 自动检查版本是否与 `main` 不同、格式是否合法、对应标签或 Release 是否已占用，并运行测试、vet 和五个平台的原生构建及 `--help`。版本结果显示在 PR 检查和 Actions 摘要中。
+
+审核并**手动合并** PR 后，发布流程检出实际合并提交，重新测试、构建五个平台并生成 SHA-256 清单，然后自动创建标签和完整 GitHub Release。普通 PR、未合并关闭和直接 push 不发布；已存在的版本不会覆盖。预发布后缀自动标记为 prerelease，不需要手工打标签或执行发布命令。
+
+维护细节见 [PR 检查规范](<spec/spec-process-cicd-pr-checks.md>) 和 [自动发布规范](<spec/spec-process-cicd-release.md>)。
 
 ## 已知限制
 

@@ -1,0 +1,134 @@
+name: PR checks
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  version:
+    name: Version check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate VERSION
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version=$(< VERSION)
+          # X.Y.Z[-prerelease]，不带 v 前缀或构建元数据。
+          if [[ ! $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo '::error file=VERSION::Expected X.Y.Z or X.Y.Z-prerelease (without v or build metadata).'
+            exit 1
+          fi
+          if [[ $version == *-* ]]; then
+            IFS=. read -ra identifiers <<< "${version#*-}"
+            for identifier in "${identifiers[@]}"; do
+              if [[ $identifier =~ ^0[0-9]+$ ]]; then
+                echo '::error file=VERSION::Numeric prerelease identifiers cannot have leading zeros.'
+                exit 1
+              fi
+            done
+          fi
+          if [[ -n $(git ls-tree --name-only origin/main -- VERSION) ]]; then
+            base=$(git show origin/main:VERSION)
+            if [[ $version == "$base" ]]; then
+              echo '::error file=VERSION::Update VERSION in this PR; it is unchanged from main.'
+              exit 1
+            fi
+          fi
+          tag="v$version"
+          refs=$(git ls-remote --tags origin "refs/tags/$tag")
+          releases=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$tag\") | .tag_name")
+          if [[ -n $refs || -n $releases ]]; then
+            echo "::error file=VERSION::Version $tag is already occupied by a tag or Release."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "VERSION $tag is valid, changed from main and unoccupied."
+      - name: Version result
+        if: always()
+        env:
+          RESULT: ${{ steps.version.outcome }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          echo "## VERSION check: $RESULT" >> "$GITHUB_STEP_SUMMARY"
+          echo "Version: $TAG. See the validation step for failure details." >> "$GITHUB_STEP_SUMMARY"
+
+  checks:
+    name: Checks (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15
+            goos: darwin
+            goarch: arm64
+            extension: ''
+          - target: windows-amd64
+            runner: windows-2022
+            goos: windows
+            goarch: amd64
+            extension: .exe
+          - target: windows-arm64
+            runner: windows-11-arm
+            goos: windows
+            goarch: arm64
+            extension: .exe
+          - target: linux-amd64
+            runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+            extension: ''
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            extension: ''
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+      - name: Format, unit tests and vet
+        run: |
+          test -z "$(gofmt -l main.go internal)"
+          go test -count=1 ./...
+          go vet ./...
+      - name: Race tests
+        if: matrix.target == 'linux-amd64'
+        run: go test -race -count=1 ./...
+      - name: Native build and CLI smoke test
+        env:
+          EXPECTED_GOOS: ${{ matrix.goos }}
+          EXPECTED_GOARCH: ${{ matrix.goarch }}
+          EXTENSION: ${{ matrix.extension }}
+        run: |
+          test "$(go env GOOS)" = "$EXPECTED_GOOS"
+          test "$(go env GOARCH)" = "$EXPECTED_GOARCH"
+          CGO_ENABLED=0 go build -trimpath -o "dist/native/skillscli$EXTENSION" .
+          "./dist/native/skillscli$EXTENSION" --help
+      - name: Verify all release binaries and checksums
+        if: matrix.target == 'linux-amd64'
+        run: bash .github/scripts/build.sh dist/release

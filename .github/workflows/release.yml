@@ -1,0 +1,91 @@
+name: Release merged PR
+
+# pull_request_target 使用 main 上的工作流，可为 fork PR 的合并事件提供发布权限。
+# 绝不检出未合并 PR 的 head；只执行已经合入 main 的精确提交。
+on:
+  pull_request_target:
+    branches: [main]
+    types: [closed]
+
+permissions: {}
+
+# 按 PR 隔离，避免全仓库 concurrency 的单一 pending 槽吞掉其他合并事件。
+concurrency:
+  group: release-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify the actual merged source
+        run: |
+          test "$(git rev-parse HEAD)" = "$MERGE_SHA"
+          git merge-base --is-ancestor "$MERGE_SHA" origin/main
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache: false
+      - name: Read release version
+        id: version
+        run: |
+          version=$(< VERSION)
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if [[ $version == *-* ]]; then
+            echo 'prerelease=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'prerelease=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Test merged code
+        run: |
+          test -z "$(gofmt -l main.go internal)"
+          go test -count=1 ./...
+          go vet ./...
+      - name: Build all five binaries and SHA-256 manifest
+        run: bash .github/scripts/build.sh
+      - name: Create complete Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          refs=$(git ls-remote --tags origin "refs/tags/$TAG")
+          releases=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$TAG\") | .tag_name")
+          if [[ -n $refs || -n $releases ]]; then
+            echo "::error::Version $TAG is already occupied by a tag or Release; refusing to overwrite it."
+            exit 1
+          fi
+          gh release create "$TAG" \
+            dist/skillscli_darwin_arm64 \
+            dist/skillscli_windows_amd64.exe \
+            dist/skillscli_windows_arm64.exe \
+            dist/skillscli_linux_amd64 \
+            dist/skillscli_linux_arm64 \
+            dist/checksums.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$MERGE_SHA" --title "$TAG" --generate-notes \
+            --prerelease="$PRERELEASE" --draft
+          test "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" -eq 6
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "## 已发布 $TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
+      - name: Report release failure
+        if: failure()
+        run: |
+          echo "::error::Release failed. Existing tags/Releases are never overwritten. Check the failed step; a failed upload may leave a draft. Inspect it before retrying."
+          echo "## 发布失败" >> "$GITHUB_STEP_SUMMARY"
+          echo "查看失败步骤的原始错误；不会覆盖已有标签或 Release。上传失败可能保留草稿，确认无已发布版本后才能人工清理残留草稿/标签并重跑。" >> "$GITHUB_STEP_SUMMARY"
