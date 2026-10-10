@@ -1,0 +1,176 @@
+name: PR checks and release
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  # 只有合并后才使用 main 上的受信工作流；绝不执行未合并的 PR head。
+  pull_request_target:
+    branches: [main]
+    types: [closed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: skillscli-${{ github.event_name }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  checks:
+    name: Version, tests and build
+    if: github.event_name == 'pull_request' || github.event.pull_request.merged == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.merge_commit_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Confirm actual merged commit
+        if: github.event_name == 'pull_request_target'
+        env:
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$MERGE_SHA"
+          git merge-base --is-ancestor "$MERGE_SHA" origin/main
+      - name: Validate PR version
+        id: version
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ ! $PR_TITLE =~ ^\[(v[0-9A-Za-z.+-]+)\][[:space:]]+[^[:space:]] ]]; then
+            echo '::error::PR title must start with [vX.Y.Z] or [vX.Y.Z-prerelease], followed by a description.'
+            exit 1
+          fi
+          tag=${BASH_REMATCH[1]}
+          if [[ ! $tag =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo '::error::Invalid SemVer: use vX.Y.Z[-prerelease], without leading zeros or build metadata.'
+            exit 1
+          fi
+          prerelease=false
+          if [[ $tag == *-* ]]; then
+            prerelease=true
+            IFS=. read -ra identifiers <<< "${tag#*-}"
+            for identifier in "${identifiers[@]}"; do
+              if [[ $identifier =~ ^0[0-9]+$ ]]; then
+                echo '::error::Numeric prerelease identifiers cannot have leading zeros.'
+                exit 1
+              fi
+            done
+          fi
+          # 已撤回且删除的历史标签无法从远程查询，禁止复用这个已知版本。
+          if [[ $tag == v0.1.0 ]]; then
+            echo '::error::v0.1.0 was retracted and must never be reused.'
+            exit 1
+          fi
+          refs=$(git ls-remote --tags origin "refs/tags/$tag")
+          releases=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$tag\") | .tag_name")
+          if [[ -n $refs || -n $releases ]]; then
+            echo "::error::Version $tag is already occupied by a Git tag or Release."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Version $tag is valid and unoccupied (prerelease=$prerelease)."
+      - name: Version result
+        if: always()
+        env:
+          RESULT: ${{ steps.version.outcome }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          echo "## PR version check: $RESULT" >> "$GITHUB_STEP_SUMMARY"
+          echo "Version: $TAG. See Validate PR version for failure details." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache: false
+      - name: Format, unit tests, race and vet
+        run: |
+          test -z "$(gofmt -l main.go internal)"
+          go test -count=1 ./...
+          go test -race -count=1 ./...
+          go vet ./...
+      - name: Build five binaries and checksums
+        run: |
+          mkdir -p dist/release
+          for target in darwin/arm64 windows/amd64 windows/arm64 linux/amd64 linux/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            binary="dist/release/skillscli_${os}_${arch}"
+            if [[ $os == windows ]]; then binary+=.exe; fi
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -o "$binary" .
+            test -s "$binary"
+            metadata=$(go version -m "$binary")
+            [[ $metadata == *"GOOS=$os"* && $metadata == *"GOARCH=$arch"* && $metadata == *'CGO_ENABLED=0'* ]]
+            file "$binary"
+          done
+          ./dist/release/skillscli_linux_amd64 --help
+          cd dist/release
+          sha256sum skillscli_* > checksums.txt
+          test "$(wc -l < checksums.txt)" -eq 5
+          sha256sum -c checksums.txt
+      - name: Keep merged-commit release assets
+        if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-binaries
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish merged PR
+    needs: checks
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-binaries
+          path: dist/release
+      - name: Publish complete Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.checks.outputs.tag }}
+          PRERELEASE: ${{ needs.checks.outputs.prerelease }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          # 上传至 GitHub 前再次校验下载附件和当前远程占用，拒绝覆盖或重发。
+          (cd dist/release && test "$(wc -l < checksums.txt)" -eq 5 && sha256sum -c checksums.txt)
+          refs=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$TAG" --jq ".[] | select(.ref == \"refs/tags/$TAG\") | .ref")
+          releases=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$TAG\") | .tag_name")
+          if [[ -n $refs || -n $releases ]]; then
+            echo "::error::Version $TAG is already occupied; refusing to overwrite it."
+            exit 1
+          fi
+          gh release create "$TAG" \
+            dist/release/skillscli_darwin_arm64 \
+            dist/release/skillscli_windows_amd64.exe \
+            dist/release/skillscli_windows_arm64.exe \
+            dist/release/skillscli_linux_amd64 \
+            dist/release/skillscli_linux_arm64 \
+            dist/release/checksums.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$MERGE_SHA" \
+            --title "$TAG" --generate-notes --prerelease="$PRERELEASE" --draft
+          test "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" -eq 6
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          echo "## 已发布 $TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
+      - name: Report publication failure
+        if: failure()
+        run: |
+          echo '::error::Release failed; no existing version is overwritten. Check the original error and any remaining draft before retrying.'
+          echo '## 发布失败：检查原始错误及残留草稿；不覆盖任何已有版本。' >> "$GITHUB_STEP_SUMMARY"

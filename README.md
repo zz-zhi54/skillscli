@@ -12,26 +12,62 @@
 
 ## 安装与前提
 
-需要 Go **1.22 或更新版本**及 PATH 中可执行的系统 **Git**。
+普通用户**不需要安装 Go**，但运行 skillscli 仍需要 PATH 中可执行的系统 **Git**。
 
-推荐使用 `go install` 安装，可用版本以 [Releases](https://github.com/zz-zhi54/skillscli/releases) 页面为准：
+从 [GitHub Releases](https://github.com/zz-zhi54/skillscli/releases) 选择版本，下载对应平台的可执行文件（无需解压）：
+
+| 平台 | 下载文件 |
+| --- | --- |
+| macOS Apple Silicon | `skillscli_darwin_arm64` |
+| Windows x64 | `skillscli_windows_amd64.exe` |
+| Windows ARM64 | `skillscli_windows_arm64.exe` |
+| Linux x64 | `skillscli_linux_amd64` |
+| Linux ARM64 | `skillscli_linux_arm64` |
+
+不提供 macOS Intel 版本。beta、rc 等版本在 Releases 中标记为预发布；升级前请阅读对应版本说明。
+
+### macOS / Linux
+
+在下载目录运行以下命令，将文件名替换为对应平台的名称：
 
 ```sh
-go install github.com/zz-zhi54/skillscli@<version>
+mkdir -p "$HOME/.local/bin"
+chmod +x skillscli_darwin_arm64
+mv skillscli_darwin_arm64 "$HOME/.local/bin/skillscli"
+export PATH="$HOME/.local/bin:$PATH"
+skillscli --help
+git --version
 ```
 
-把 `<version>` 替换成 Releases 中列出的标签。预发布版本不会被 `@latest` 选中；如果 `@latest` 因代理缓存等原因不可用，请显式指定标签。命令和行为可能随版本演进调整，升级前请查看对应 Release 的说明。
+将 `export PATH="$HOME/.local/bin:$PATH"` 加入所用 Shell 的配置（如 `~/.zshrc` 或 `~/.bashrc`），重新打开终端后生效。
 
-也可以在本项目根目录构建（程序入口位于根目录 `main.go`）：
+### Windows
+
+将下载文件重命名为 `skillscli.exe`，放入固定目录（如 `%USERPROFILE%\bin`）。在“系统属性 → 环境变量”中将该目录添加到用户 `Path`，重新打开 PowerShell 后运行：
+
+```powershell
+skillscli --help
+git --version
+```
+
+### 校验与升级
+
+每个新版本还提供 `checksums.txt`，列出五个可执行文件的 SHA-256。请在重命名前校验下载文件：macOS 使用 `shasum -a 256 <文件名>`，Linux 使用 `sha256sum <文件名>`，Windows 使用 `Get-FileHash .\<文件名> -Algorithm SHA256`，将结果与校验文件中对应行比较。
+
+当前没有自动升级或 `sync --upgrade`；升级时下载新版本并替换已安装的程序。早期 Release 可能没有二进制附件，请选择包含上述附件的版本。
+
+### 开发者从源码构建
+
+需要 Go **1.22 或更新版本**及系统 Git。在本项目根目录构建（程序入口位于根目录 `main.go`）：
 
 ```sh
-go build -o skillscli .
-./skillscli --help
+go build -o dist/skillscli .
+./dist/skillscli --help
 # 或不生成二进制直接运行
 go run . --help
 ```
 
-Windows 可使用 `go build -o skillscli.exe .`。把生成的程序放到 PATH 后即可直接运行 `skillscli`。当前没有自动升级或 `sync --upgrade`；升级请重新执行 `go install` 并指定新版本。
+Windows 可使用 `go build -o dist/skillscli.exe .`。
 
 ## 快速开始
 
@@ -166,7 +202,7 @@ lock 是本地所有权与修改保护依据，不是需要先恢复的旧 Git �
 ## 开发与验证
 
 ```sh
-gofmt -l cmd internal
+gofmt -l main.go internal
 go test -count=1 ./...
 go test -race -count=1 ./...
 go vet ./...
@@ -177,14 +213,36 @@ GOOS=linux GOARCH=amd64 go build ./...
 
 测试使用隔离的本地临时 Git 仓库，不依赖真实远程服务或认证；覆盖完整命令生命周期、两个作用域、引用选择、修改保护、冲突、事务失败与中断恢复。平台特殊测试按实际条件跳过。
 
-当前实际运行验证平台为 macOS；Windows/Linux 交叉编译仅检查可编译性，不代表这些系统上的真实文件系统、权限和文件占用行为已通过运行测试。适合在上述边界内进行日常使用；首次在其他平台使用前建议备份并做实际环境验证。
+本地验证平台为 macOS ARM64；GitHub Actions 在 Linux x64 执行单元测试、race 和 CLI 帮助。Windows x64 / ARM64、Linux ARM64 目前仅交叉编译检查，不代表这些系统上的真实文件系统、权限和文件占用行为已通过运行测试。首次在其他平台使用前建议备份并做实际环境验证。
+
+## 版本与自动发布
+
+**PR 标题填写版本号 → 检查通过 → 手动合并 → 自动发布。**
+
+版本以 Git Tag 为正式记录，采用 [Go 官方版本规范](https://go.dev/doc/modules/version-numbers)的 `v` 前缀与 Semantic Versioning（SemVer）；不维护版本文件，也不在模块文件中记录当前版本。每个目标为 `main` 的 PR 标题使用以下形式：
+
+```text
+[v0.1.0-beta.3] 添加自动发布功能
+[v0.1.0-rc.1] 准备候选版本
+[v0.1.1] 修复问题
+```
+
+标题只是本次发布的版本输入：`[vX.Y.Z] 描述` 或 `[vX.Y.Z-prerelease] 描述`，不带构建元数据，数值标识符不能有前导零。示例不是当前可用版本；实际版本及附件以 [Releases](https://github.com/zz-zhi54/skillscli/releases) 为准。
+
+PR 创建、更新提交或修改标题时，单一 [GitHub Actions 工作流](<.github/workflows/ci.yml>) 检查 SemVer、已有标签及 Release（含草稿）占用，执行格式检查、单元测试、race、vet 和五平台交叉编译，并运行 Linux x64 的 `--help`。版本检查结果显示在 PR 状态、错误注解和 Actions 摘要中。**已撤回的 `v0.1.0` 不可重复使用**；已有模块撤回声明保留不变。
+
+审核并**手动合并** PR 后，同一工作流检出准确的合并提交，重新检查、测试与构建，生成 SHA-256 清单。全部成功后，发布命令自动创建指向该提交的标签，上传五个可执行文件和校验文件，确认附件完整后公开 Release。beta、rc 等版本自动标记为 Pre-release。
+
+普通 PR、未合并关闭、直接 push 和标签 push 不发布；不需要手工打标签或运行发布命令，也不会覆盖已有版本。上传失败可能留下草稿，维护者需先检查真实发布状态再处理，流程不自动删除标签或 Release。
+
+仓库的 `main` 规则应将 **Version, tests and build** 设置为必需状态检查，并要求合并前保持分支最新。维护细节见 [工作流规范](<spec/spec-process-cicd-pr-checks-and-release.md>)。
 
 ## 已知限制
 
 - 只支持上述四个命令；没有交互式选择、`sync --upgrade`、版本锁定之外的 ref 表达式或插件机制。
 - 项目作用域以运行命令时的当前工作目录为准，不向上搜索项目根目录。
 - 指纹不含文件权限、空目录、ACL 和扩展属性；这些变化不会触发 modified 保护。
-- 跨平台行为仅在 macOS 上经过运行验证，Windows/Linux 只有交叉编译检查。
+- 运行测试覆盖本地 macOS ARM64 和 CI 的 Linux x64；Windows x64 / ARM64、Linux ARM64 仅交叉编译检查。
 - 标签不隐式固定为永久版本；需要严格固定请使用完整 Commit SHA。
 
 详细阶段记录见 [实施计划](<docs/implementation-plan.md>)。
