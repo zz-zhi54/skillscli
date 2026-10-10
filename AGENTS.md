@@ -46,7 +46,7 @@ go build -o dist/skillscli.exe .
 
 ```sh
 # 应无输出；入口已移到根目录，不使用历史 cmd 路径
-gofmt -l main.go internal
+gofmt -l main.go main_test.go internal
 go test -count=1 ./...
 go test -race -count=1 ./...
 go vet ./...
@@ -101,8 +101,8 @@ go test -cover ./...
 
 ## 构建、发布与变更交付
 
-这是单模块 CLI，部署产物为可执行文件。涉及发布时先检查 [VERSION](<VERSION>)、[版本检查脚本](<.github/scripts/version.go>) 及 `.github/workflows` 中的实际流程，不假定本地构建等于发布。版本检查脚本会访问远程 Git 标签和 GitHub Releases，并需要 `gh`，不属于离线单元测试。只有用户明确要求时才执行发布或远程 Git 操作。
+这是单模块 CLI，部署产物为可执行文件。涉及发布先检查 [VERSION](<VERSION>)、唯一[工作流](<.github/workflows/ci.yml>)、[发布规范](<spec/spec-process-cicd-pr-checks-and-release.md>)及 [release-skillscli](<.agents/skills/release-skillscli/SKILL.md>)。人工确认完整版本写入 VERSION，在开发分支最终提交上创建并推送同名标签，PR 检查版本与标签及测试；手动使用 Create a merge commit 合并 main 后自动使用已有标签构建发布。禁止 Squash/Rebase 丢失标签提交；标签必须保持 PR head 并进入 main 历史，打标签后不能再提交或更新基线。不推 main、不自动合并、不从 PR 标题获取或自动生成版本，不额外创建、移动或覆盖标签，不新增独立版本/发布程序或脚本。入口用 go:embed 嵌入 VERSION，直接构建与 CI 的 -v/--version 均输出与标签一致的完整版本，不依赖运行时文件或版本注入参数。保留五个不压缩可执行文件及 checksums.txt、撤回声明，v0.1.0 永久不可复用。只有用户明确要求时才执行远程 Git 操作；创建发布 PR 不授权合并或直接发布。
 
-用户安装使用 `go install github.com/zz-zhi54/skillscli@<version>`，其中版本来自实际发布标签；预发布不会被 `@latest` 选中，不在文档中硬编码当前版本。
+普通用户优先使用 Releases 二进制，无需 Go；源码安装和开发参照 [README](<README.md>)。Go 源码安装版本来自实际发布标签，预发布不会被 `@latest` 选中，不在文档中硬编码当前版本。
 
 保留已有未提交改动和用户运行期数据。变更说明应交代影响的业务规则、执行的检查和平台验证范围；改变用户行为时同步更新 [README.md](<README.md>)。提交历史同时有中文描述和 `docs:` 风格，没有已配置的统一 PR 标题规则，沿用相关近期提交即可；未经要求不提交、推送或创建/合并 PR。

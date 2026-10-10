@@ -6,12 +6,13 @@ import "github.com/spf13/cobra"
 
 // NewRootCommand 创建一次独立的命令树，不使用包级共享命令对象。
 // 只注册已实现的业务命令。
-func NewRootCommand() *cobra.Command {
+func NewRootCommand(version string) *cobra.Command {
 	// &cobra.Command{...} 先用字段名初始化结构体，再取得它的指针。
 	// RunE 是函数类型字段；匿名函数被 Cobra 在参数校验通过后调用，而非此时执行。
 	cmd := &cobra.Command{
-		Use:   "skillscli",
-		Short: "管理 Agent Skills",
+		Use:     "skillscli",
+		Short:   "管理 Agent Skills",
+		Version: version,
 		// 根命令没有位置参数，未实现的命令不能被当成成功执行的请求。
 		Args: cobra.NoArgs,
 		// 错误由 main 统一输出，避免 Cobra 和入口重复打印同一个错误。
@@ -25,6 +26,8 @@ func NewRootCommand() *cobra.Command {
 			return cmd.Help()
 		},
 	}
+	cmd.SetVersionTemplate("{{.Version}}\n")
+	cmd.Flags().BoolP("version", "v", false, "显示版本号")
 	// PersistentFlags 注册的是可被子命令继承的参数。
 	// false 表示默认项目作用域；--global 和 -g 是同一个布尔参数的长、短写法。
 	// 此处只声明参数，具体作用域由业务命令读取并决定。

@@ -3,8 +3,8 @@ name: PR checks and release
 on:
   pull_request:
     branches: [main]
-    types: [opened, edited, synchronize, reopened, ready_for_review]
-  # 只有合并后才使用 main 上的受信工作流；绝不执行未合并的 PR head。
+    types: [opened, synchronize, reopened, ready_for_review]
+  # 仅在手动合并后使用 main 的受信工作流，检查 Job 不持有写权限。
   pull_request_target:
     branches: [main]
     types: [closed]
@@ -22,45 +22,40 @@ defaults:
 
 jobs:
   checks:
+    # 保留 main 的必需检查名称。
     name: Version, tests and build
     if: github.event_name == 'pull_request' || github.event.pull_request.merged == true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ github.event.pull_request.head.sha }}
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.merge_commit_sha || github.sha }}
+          # PR 测试合并结果；发布只构建已经进入 main 历史的标签提交。
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Confirm actual merged commit
-        if: github.event_name == 'pull_request_target'
-        env:
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$MERGE_SHA"
-          git merge-base --is-ancestor "$MERGE_SHA" origin/main
-      - name: Validate PR version
+      - name: Validate VERSION and PR head tag
         id: version
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          MERGED: ${{ github.event_name == 'pull_request_target' }}
         run: |
-          if [[ ! $PR_TITLE =~ ^\[(v[0-9A-Za-z.+-]+)\][[:space:]]+[^[:space:]] ]]; then
-            echo '::error::PR title must start with [vX.Y.Z] or [vX.Y.Z-prerelease], followed by a description.'
+          TAG=$(< VERSION)
+          if [[ ! $TAG =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo '::error::VERSION must contain vX.Y.Z[-prerelease], without leading zeros or build metadata.'
             exit 1
           fi
-          tag=${BASH_REMATCH[1]}
-          if [[ ! $tag =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
-            echo '::error::Invalid SemVer: use vX.Y.Z[-prerelease], without leading zeros or build metadata.'
-            exit 1
-          fi
+          printf '%s\n' "$TAG" | cmp -s VERSION -
+          git show "$HEAD_SHA:VERSION" | cmp -s VERSION -
           prerelease=false
-          if [[ $tag == *-* ]]; then
+          if [[ $TAG == *-* ]]; then
             prerelease=true
-            IFS=. read -ra identifiers <<< "${tag#*-}"
+            IFS=. read -ra identifiers <<< "${TAG#*-}"
             for identifier in "${identifiers[@]}"; do
               if [[ $identifier =~ ^0[0-9]+$ ]]; then
                 echo '::error::Numeric prerelease identifiers cannot have leading zeros.'
@@ -68,39 +63,36 @@ jobs:
               fi
             done
           fi
-          # 已撤回且删除的历史标签无法从远程查询，禁止复用这个已知版本。
-          if [[ $tag == v0.1.0 ]]; then
+          if [[ $TAG == v0.1.0 ]]; then
             echo '::error::v0.1.0 was retracted and must never be reused.'
             exit 1
           fi
-          refs=$(git ls-remote --tags origin "refs/tags/$tag")
-          releases=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$tag\") | .tag_name")
-          if [[ -n $refs || -n $releases ]]; then
-            echo "::error::Version $tag is already occupied by a Git tag or Release."
+          if [[ $(git rev-parse "refs/tags/$TAG^{commit}") != "$HEAD_SHA" ]]; then
+            echo '::error::The existing VERSION tag must point to the final PR head commit.'
             exit 1
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [[ $MERGED == true ]]; then
+            # Squash/Rebase 若丢失原始 head 则拒绝发布；不能重打标签绕过。
+            test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+            git merge-base --is-ancestor "$HEAD_SHA" "$MERGE_SHA"
+            git merge-base --is-ancestor "$MERGE_SHA" origin/main
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-          echo "Version $tag is valid and unoccupied (prerelease=$prerelease)."
-      - name: Version result
-        if: always()
-        env:
-          RESULT: ${{ steps.version.outcome }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          echo "## PR version check: $RESULT" >> "$GITHUB_STEP_SUMMARY"
-          echo "Version: $TAG. See Validate PR version for failure details." >> "$GITHUB_STEP_SUMMARY"
+          echo "## Version: $TAG ($HEAD_SHA, prerelease=$prerelease)" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: stable
           cache: false
       - name: Format, unit tests, race and vet
         run: |
-          test -z "$(gofmt -l main.go internal)"
+          test -z "$(gofmt -l main.go main_test.go internal)"
           go test -count=1 ./...
           go test -race -count=1 ./...
           go vet ./...
       - name: Build five binaries and checksums
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           mkdir -p dist/release
           for target in darwin/arm64 windows/amd64 windows/arm64 linux/amd64 linux/arm64; do
@@ -112,15 +104,15 @@ jobs:
             test -s "$binary"
             metadata=$(go version -m "$binary")
             [[ $metadata == *"GOOS=$os"* && $metadata == *"GOARCH=$arch"* && $metadata == *'CGO_ENABLED=0'* ]]
-            file "$binary"
           done
-          ./dist/release/skillscli_linux_amd64 --help
+          test "$(./dist/release/skillscli_linux_amd64 -v)" = "$TAG"
+          test "$(./dist/release/skillscli_linux_amd64 --version)" = "$TAG"
           cd dist/release
           sha256sum skillscli_* > checksums.txt
           test "$(wc -l < checksums.txt)" -eq 5
           sha256sum -c checksums.txt
-      - name: Keep merged-commit release assets
-        if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true
+      - name: Keep tag-commit release assets
+        if: github.event_name == 'pull_request_target'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-binaries
@@ -129,9 +121,9 @@ jobs:
           retention-days: 1
 
   release:
-    name: Publish merged PR
+    name: Publish tagged version
     needs: checks
-    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -145,15 +137,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.checks.outputs.tag }}
+          TAG_SHA: ${{ needs.checks.outputs.sha }}
           PRERELEASE: ${{ needs.checks.outputs.prerelease }}
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
-          # 上传至 GitHub 前再次校验下载附件和当前远程占用，拒绝覆盖或重发。
           (cd dist/release && test "$(wc -l < checksums.txt)" -eq 5 && sha256sum -c checksums.txt)
-          refs=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$TAG" --jq ".[] | select(.ref == \"refs/tags/$TAG\") | .ref")
+          # 验证普通标签或直接指向 commit 的 annotated tag；不执行标签源码。
+          verify_tag() {
+            local ref type remote_sha
+            ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '[.object.type, .object.sha] | @tsv')
+            read -r type remote_sha <<< "$ref"
+            if [[ $type == tag ]]; then
+              remote_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$remote_sha" --jq 'select(.object.type == "commit") | .object.sha')
+            else
+              test "$type" = commit
+            fi
+            test "$remote_sha" = "$TAG_SHA"
+          }
+          verify_tag
+          # 唯一一次占用查询，用写权限令牌覆盖公开 Release 和草稿。
           releases=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$TAG\") | .tag_name")
-          if [[ -n $refs || -n $releases ]]; then
-            echo "::error::Version $TAG is already occupied; refusing to overwrite it."
+          if [[ -n $releases ]]; then
+            echo "::error::Release $TAG already exists; refusing to overwrite it."
             exit 1
           fi
           gh release create "$TAG" \
@@ -163,14 +167,15 @@ jobs:
             dist/release/skillscli_linux_amd64 \
             dist/release/skillscli_linux_arm64 \
             dist/release/checksums.txt \
-            --repo "$GITHUB_REPOSITORY" --target "$MERGE_SHA" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "$TAG" --generate-notes --prerelease="$PRERELEASE" --draft
-          test "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" -eq 6
+          # 不仅计数：附件名称、数量和大小都必须与本地六个文件匹配。
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | [.name, .size] | @tsv' | sort > remote-assets.txt
+          for asset in dist/release/*; do
+            printf '%s\t%s\n' "${asset##*/}" "$(stat -c %s "$asset")"
+          done | sort > local-assets.txt
+          cmp local-assets.txt remote-assets.txt
+          verify_tag
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
           echo "## 已发布 $TAG" >> "$GITHUB_STEP_SUMMARY"
           echo "https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
-      - name: Report publication failure
-        if: failure()
-        run: |
-          echo '::error::Release failed; no existing version is overwritten. Check the original error and any remaining draft before retrying.'
-          echo '## 发布失败：检查原始错误及残留草稿；不覆盖任何已有版本。' >> "$GITHUB_STEP_SUMMARY"

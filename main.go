@@ -3,13 +3,20 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/zz-zhi54/skillscli/internal/cli"
 )
+
+// VERSION 位于根目录，直接构建和 CI 构建共用同一份编译期版本。
+//
+//go:embed VERSION
+var version string
 
 // main 是程序的进程入口，只负责启动命令和处理最终错误。
 // 具体命令逻辑放在 internal/cli，配置逻辑放在 internal/config，
@@ -22,7 +29,7 @@ func main() {
 	// 回滚仍由事务代码负责。stop 用于释放信号订阅，正常返回时由 defer 调用。
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := cli.NewRootCommand().ExecuteContext(ctx); err != nil {
+	if err := cli.NewRootCommand(strings.TrimSpace(version)).ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		// os.Exit 不执行 main 中的 defer；业务层必须在返回错误前完成回滚和资源关闭。
 		os.Exit(1)

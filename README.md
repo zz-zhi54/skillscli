@@ -58,11 +58,12 @@ git --version
 
 ### 开发者从源码构建
 
-需要 Go **1.22 或更新版本**及系统 Git。在本项目根目录构建（程序入口位于根目录 `main.go`）：
+需要 Go **1.22 或更新版本**及系统 Git。在本项目根目录构建（程序入口为 [main.go](<main.go>)）：
 
 ```sh
 go build -o dist/skillscli .
 ./dist/skillscli --help
+./dist/skillscli --version
 # 或不生成二进制直接运行
 go run . --help
 ```
@@ -202,7 +203,7 @@ lock 是本地所有权与修改保护依据，不是需要先恢复的旧 Git �
 ## 开发与验证
 
 ```sh
-gofmt -l main.go internal
+gofmt -l main.go main_test.go internal
 go test -count=1 ./...
 go test -race -count=1 ./...
 go vet ./...
@@ -213,29 +214,33 @@ GOOS=linux GOARCH=amd64 go build ./...
 
 测试使用隔离的本地临时 Git 仓库，不依赖真实远程服务或认证；覆盖完整命令生命周期、两个作用域、引用选择、修改保护、冲突、事务失败与中断恢复。平台特殊测试按实际条件跳过。
 
-本地验证平台为 macOS ARM64；GitHub Actions 在 Linux x64 执行单元测试、race 和 CLI 帮助。Windows x64 / ARM64、Linux ARM64 目前仅交叉编译检查，不代表这些系统上的真实文件系统、权限和文件占用行为已通过运行测试。首次在其他平台使用前建议备份并做实际环境验证。
+本地验证平台为 macOS ARM64；GitHub Actions 在 Linux x64 执行单元测试、race 和 CLI 版本输出校验。Windows x64 / ARM64、Linux ARM64 目前仅交叉编译检查，不代表这些系统上的真实文件系统、权限和文件占用行为已通过运行测试。首次在其他平台使用前建议备份并做实际环境验证。
 
 ## 版本与自动发布
 
-**PR 标题填写版本号 → 检查通过 → 手动合并 → 自动发布。**
+**确认完整版本 → 更新 VERSION 并完成最终提交 → 开发分支打同名标签 → PR 检查 → 手动合并 main → CI 使用已有标签发布。**
 
-版本以 Git Tag 为正式记录，采用 [Go 官方版本规范](https://go.dev/doc/modules/version-numbers)的 `v` 前缀与 Semantic Versioning（SemVer）；不维护版本文件，也不在模块文件中记录当前版本。每个目标为 `main` 的 PR 标题使用以下形式：
+根目录 [VERSION](<VERSION>) 保存一行完整版本号（如 `v0.2.0`，行尾 LF），采用三段 SemVer：`vX.Y.Z[-prerelease]`，不带构建元数据，数值标识符无前导零。版本由维护者明确确认，不从 PR 标题提取，不自动递增。进入 v2 及以上还需核对 Go 模块路径兼容要求。**已撤回的 `v0.1.0` 永久不能复用**，模块撤回声明保留。
+
+`skillscli -v` 和 `skillscli --version` 只输出完整版本号。入口通过 Go 原生 `go:embed` 在编译期包含 [VERSION](<VERSION>)；直接 `go build` 与 CI 构建使用相同来源，不需要链接参数、运行时版本文件或 Git。五个平台的程序版本与对应 Release 的 Git Tag 一致。
+
+准备步骤：
+
+1. 使用 [release-skillscli Skill](<.agents/skills/release-skillscli/SKILL.md>) 或手工确认未占用的完整版本，更新 [VERSION](<VERSION>)；完成所有代码、文档、测试和 main 基线更新。
+2. **在开发分支最终提交上**创建并推送同名标签，再创建/更新目标 main 的 PR。已存在的同名标签只能在确实指向该最终提交时使用；不移动、覆盖或删除标签。
+3. 单一 [工作流](<.github/workflows/ci.yml>) 检查版本格式、标签名与版本相同、标签指向 PR head，并执行格式检查、单元测试、race、vet、五平台构建和 SHA-256 校验。PR 标题任意，标签 push 本身不发布。
+4. 检查通过后，由维护者使用 **Create a merge commit** 手动合并，保留已打标签的 PR head，使它进入 main 历史。**不要 Squash 或 Rebase**：若原提交丢失，发布检查会失败；不能靠合并后重打标签修复。
+5. 合并事件自动验证 PR head 属于实际合并提交和 main 历史，从该已有标签指向的提交重新测试构建（不是从新 merge commit 或 main tip 构建），创建 Release 草稿并上传五个原生可执行文件及 `checksums.txt`，不压缩。校验、附件名称/数量/大小与标签 SHA 复核通过后才公开，预发布后缀自动标记 Pre-release。
 
 ```text
-[v0.1.0-beta.3] 添加自动发布功能
-[v0.1.0-rc.1] 准备候选版本
-[v0.1.1] 修复问题
+使用 release-skillscli，准备版本 vX.Y.Z 的发布 PR；不合并。
 ```
 
-标题只是本次发布的版本输入：`[vX.Y.Z] 描述` 或 `[vX.Y.Z-prerelease] 描述`，不带构建元数据，数值标识符不能有前导零。示例不是当前可用版本；实际版本及附件以 [Releases](https://github.com/zz-zhi54/skillscli/releases) 为准。
+**打标签后不能再提交代码或更新 main 基线**，否则 PR head 会变化而标签不再匹配。先完成所有最终提交和必需检查准备，再打标签；确需继续修改时由维护者确认新的未占用版本，不自动换号，也不移动旧标签。标签保护规则如存在必须遵守。
 
-PR 创建、更新提交或修改标题时，单一 [GitHub Actions 工作流](<.github/workflows/ci.yml>) 检查 SemVer、已有标签及 Release（含草稿）占用，执行格式检查、单元测试、race、vet 和五平台交叉编译，并运行 Linux x64 的 `--help`。版本检查结果显示在 PR 状态、错误注解和 Actions 摘要中。**已撤回的 `v0.1.0` 不可重复使用**；已有模块撤回声明保留不变。
+未合并关闭的 PR、分支 push、标签 push/删除均不发布。CI 不额外创建、移动或覆盖标签，不覆盖任何 Release/草稿；失败可能留下草稿，需维护者核实原始错误后人工处理，不自动删除或重发。合并成功也不等于发布成功。
 
-审核并**手动合并** PR 后，同一工作流检出准确的合并提交，重新检查、测试与构建，生成 SHA-256 清单。全部成功后，发布命令自动创建指向该提交的标签，上传五个可执行文件和校验文件，确认附件完整后公开 Release。beta、rc 等版本自动标记为 Pre-release。
-
-普通 PR、未合并关闭、直接 push 和标签 push 不发布；不需要手工打标签或运行发布命令，也不会覆盖已有版本。上传失败可能留下草稿，维护者需先检查真实发布状态再处理，流程不自动删除标签或 Release。
-
-仓库的 `main` 规则应将 **Version, tests and build** 设置为必需状态检查，并要求合并前保持分支最新。维护细节见 [工作流规范](<spec/spec-process-cicd-pr-checks-and-release.md>)。
+`main` 的必需检查名称仍为 **Version, tests and build**，分支最新要求不变。仓库应限制为保留提交的合并方式；本流程不擅自修改远程规则。维护细节见 [工作流规范](<spec/spec-process-cicd-pr-checks-and-release.md>)。
 
 ## 已知限制
 

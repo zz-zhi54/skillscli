@@ -43,7 +43,7 @@ func cliEnvironment(t *testing.T) (project, home string) {
 }
 
 func cliExecute(args ...string) (string, error) {
-	cmd := NewRootCommand()
+	cmd := NewRootCommand("v0.0.0-test")
 	var output bytes.Buffer
 	cmd.SetOut(&output)
 	cmd.SetErr(&output)
@@ -162,7 +162,7 @@ func (r *cliRepository) commit() string {
 
 func TestSyncCommandRegistrationAndArguments(t *testing.T) {
 	project, home := cliEnvironment(t)
-	root := NewRootCommand()
+	root := NewRootCommand("v0.0.0-test")
 	var commands []string
 	for _, cmd := range root.Commands() {
 		commands = append(commands, cmd.Name())
