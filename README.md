@@ -6,13 +6,13 @@
 
 需要 Go **1.22 或更新版本**及 PATH 中可执行的系统 **Git**。
 
-当前发布的是测试版 `v0.1.0-beta.2`，尚未发布正式版，命令和行为仍可能调整。`v0.1.0` 曾误发布为正式版，已撤回（`go.mod` 中的 `retract`），请勿使用。推荐使用 `go install` 安装：
+推荐使用 `go install` 安装，可用版本以 [Releases](https://github.com/zz-zhi54/skillscli/releases) 页面为准：
 
 ```sh
-go install github.com/zz-zhi54/skillscli@v0.1.0-beta.2
+go install github.com/zz-zhi54/skillscli@<version>
 ```
 
-注意：`@latest` 目前不可用于获取测试版。公共 Go 模块代理仍把已撤回的 `v0.1.0` 视为最新版本，请始终使用上面的显式版本。
+把 `<version>` 替换成 Releases 中列出的标签。预发布版本不会被 `@latest` 选中；如果 `@latest` 因代理缓存等原因不可用，请显式指定标签。命令和行为可能随版本演进调整，升级前请查看对应 Release 的说明。
 
 也可以在本项目根目录构建（程序入口位于根目录 `main.go`）：
 
@@ -171,7 +171,7 @@ GOOS=linux GOARCH=amd64 go build ./...
 
 当前实际运行验证平台为 macOS；Windows/Linux 交叉编译仅检查可编译性，不代表这些系统上的真实文件系统、权限和文件占用行为已通过运行测试。适合在上述边界内进行日常使用；首次在其他平台使用前建议备份并做实际环境验证。
 
-## 已知限制（v0.1.0-beta.2）
+## 已知限制
 
 - 只支持上述四个命令；没有交互式选择、`sync --upgrade`、版本锁定之外的 ref 表达式或插件机制。
 - 项目作用域以运行命令时的当前工作目录为准，不向上搜索项目根目录。
