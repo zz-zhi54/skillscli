@@ -1,0 +1,10 @@
+version: 1
+sources:
+  - source: https://github.com/github/awesome-copilot
+    paths:
+      - skills/create-github-action-workflow-specification
+    lock:
+      source: https://github.com/github/awesome-copilot
+      revision: 82701c24b99488536ca399ff4789a458b7a05db7
+      skills:
+        create-github-action-workflow-specification: h1:H0pNCKO7FkcQbL3ySUC0bNaayLv2zlEGn6sQYCrfg+c=
