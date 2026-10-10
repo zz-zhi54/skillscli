@@ -10,9 +10,9 @@
 
 ```sh
 go install github.com/zz-zhi54/skillscli@v0.1.0-beta.2
-# 尚无可用的正式版本时，@latest 会解析到最新的未撤回预发布版本
-go install github.com/zz-zhi54/skillscli@latest
 ```
+
+注意：`@latest` 目前不可用于获取测试版。公共 Go 模块代理仍把已撤回的 `v0.1.0` 视为最新版本，请始终使用上面的显式版本。
 
 也可以在本项目根目录构建（程序入口位于根目录 `main.go`）：
 
