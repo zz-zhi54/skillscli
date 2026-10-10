@@ -8,6 +8,9 @@
 # 本地工具文件
 /.idea/
 
+# 运行期进程锁
+.skillscli.lock
+
 # 运行期遗留的事务临时目录（正常应只出现在用户项目中，防御性排除）
 .skillscli-txn-*
 .skillscli-cleanup-*
