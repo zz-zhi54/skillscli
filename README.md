@@ -217,13 +217,25 @@ GOOS=linux GOARCH=amd64 go build ./...
 
 ## 版本与自动发布
 
-开发者在每个目标为 `main` 的 PR 中更新根目录 [VERSION](<VERSION>)，格式为 `X.Y.Z` 或 `X.Y.Z-beta.1` / `X.Y.Z-rc.1` 等 SemVer 预发布版本，不带 `v` 前缀或构建元数据。
+**PR 标题填写版本号 → 检查通过 → 手动合并 → 自动发布。**
 
-PR 自动检查版本是否与 `main` 不同、格式是否合法、对应标签或 Release 是否已占用，并运行测试、vet 和五个平台的原生构建及 `--help`。版本结果显示在 PR 检查和 Actions 摘要中。
+版本以 Git Tag 为正式记录，采用 [Go 官方版本规范](https://go.dev/doc/modules/version-numbers)的 `v` 前缀与 Semantic Versioning（SemVer）；不维护版本文件，也不在模块文件中记录当前版本。每个目标为 `main` 的 PR 标题使用以下形式：
 
-审核并**手动合并** PR 后，发布流程检出实际合并提交，重新测试、构建五个平台并生成 SHA-256 清单，然后自动创建标签和完整 GitHub Release。普通 PR、未合并关闭和直接 push 不发布；已存在的版本不会覆盖。预发布后缀自动标记为 prerelease，不需要手工打标签或执行发布命令。
+```text
+[v0.1.0-beta.3] 添加自动发布功能
+[v0.1.0-rc.1] 准备候选版本
+[v0.1.1] 修复问题
+```
 
-维护细节见 [PR 检查规范](<spec/spec-process-cicd-pr-checks.md>) 和 [自动发布规范](<spec/spec-process-cicd-release.md>)。
+标题只是本次发布的版本输入：`[vX.Y.Z] 描述` 或 `[vX.Y.Z-prerelease] 描述`，不带构建元数据，数值标识符不能有前导零。示例不是当前可用版本；实际版本及附件以 [Releases](https://github.com/zz-zhi54/skillscli/releases) 为准。
+
+PR 创建、更新提交或修改标题时，单一 [GitHub Actions 工作流](<.github/workflows/ci.yml>) 检查 SemVer、已有标签及 Release（含草稿）占用，执行格式检查、单元测试、race、vet 和五平台交叉编译，并运行 Linux x64 的 `--help`。版本检查结果显示在 PR 状态、错误注解和 Actions 摘要中。**已撤回的 `v0.1.0` 不可重复使用**；已有模块撤回声明保留不变。
+
+审核并**手动合并** PR 后，同一工作流检出准确的合并提交，重新检查、测试与构建，生成 SHA-256 清单。全部成功后，发布命令自动创建指向该提交的标签，上传五个可执行文件和校验文件，确认附件完整后公开 Release。beta、rc 等版本自动标记为 Pre-release。
+
+普通 PR、未合并关闭、直接 push 和标签 push 不发布；不需要手工打标签或运行发布命令，也不会覆盖已有版本。上传失败可能留下草稿，维护者需先检查真实发布状态再处理，流程不自动删除标签或 Release。
+
+仓库的 `main` 规则应将 **Version, tests and build** 设置为必需状态检查，并要求合并前保持分支最新。维护细节见 [工作流规范](<spec/spec-process-cicd-pr-checks-and-release.md>)。
 
 ## 已知限制
 
